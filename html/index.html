@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Pannel Color</title>
+
+	<meta charset="utf-8" />
+
+    <script type="text/javascript" src="js/iro.min.js"></script>
+</head>
+
+<body>
+    <div class="wheel" id="colorWheelDemo"></div>
+
+    <script>
+    var colorWheel = new iro.ColorPicker("#colorWheelDemo", {
+        width: 320,
+        height: 320,
+        padding: 4,
+        markerRadius: 8,
+        color: "rgb(68, 255, 158)",
+        css: {
+            "#logo": {
+              "stroke": "rgb"
+            },
+            ".subtitle": {
+              "color": "rgb"
+            }
+        }
+    });
+
+    var ws = new WebSocket("ws://" + location.host + ":8765");
+
+    colorWheel.on("color:change", function(color, changes) {
+        console.log(color.rgb);
+
+        if(ws.readyState == 1)
+            ws.send(JSON.stringify(color.rgb));
+    });
+
+	</script>
+</body>
+</html>
