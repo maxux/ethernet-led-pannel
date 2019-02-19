@@ -11,6 +11,7 @@
 #include <linux/if_packet.h>
 #include <jansson.h>
 
+#define INTERFACE        "eth0"
 #define MAX_PAYLOAD_SIZE 1024
 #define ARDUINO_BUFFER   1024
 
@@ -152,7 +153,7 @@ static int callback_color(struct lws *wsi, enum lws_callback_reasons reason, voi
             printf(">> <%.*s>\n", pss->len, pss->buf + LWS_PRE);
 
             if(color_json(pss->buf + LWS_PRE, pss->len, &color))
-                arduino_frame("bond0", &color);
+                arduino_frame(INTERFACE, &color);
         }
 
         lws_rx_flow_control(wsi, 0);

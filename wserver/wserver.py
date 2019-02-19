@@ -16,7 +16,8 @@ def sendeth(destination, source, etype, payload, interface="eth0"):
     s = socket(AF_PACKET, SOCK_RAW)
     s.bind((interface, 0))
 
-    s.send(mactobin(destination) + mactobin(source) + etype + payload)
+    print(source + destination + etype + payload)
+    s.send(source + destination + etype + payload)
 
 async def colorpick(websocket, path):
     while True:
