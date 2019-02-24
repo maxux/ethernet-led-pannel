@@ -138,8 +138,13 @@ color_t *color_json(void *buffer, size_t length, color_t *color) {
 
 static int callback_color(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     struct color_session *pss = (struct color_session *) user;
-    pannel_t *pannel = (pannel_t *) lws_get_protocol(wsi)->user;
+    pannel_t *pannel = NULL;
     int n;
+
+    if(!lws_get_protocol(wsi))
+        return 0;
+
+    pannel = (pannel_t *) lws_get_protocol(wsi)->user;
 
     if(reason == LWS_CALLBACK_ESTABLISHED) {
         printf("[+] new connection\n");
