@@ -36,6 +36,7 @@ void diep(char *str) {
     exit(EXIT_FAILURE);
 }
 
+// FIXME: bitch please, reuse the same socket
 static int arduino_frame(char *interface, color_t *color) {
     int sockfd;
 	struct ifreq if_idx;
@@ -80,6 +81,8 @@ static int arduino_frame(char *interface, color_t *color) {
 
     if(sendto(sockfd, sendbuf, length, 0, (struct sockaddr *) &saddr, sizeof(struct sockaddr_ll)) < 0)
         perror("send");
+
+    close(sockfd);
 
     return 0;
 }
