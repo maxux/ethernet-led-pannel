@@ -10,10 +10,11 @@
 #include <arpa/inet.h>
 #include <linux/if_packet.h>
 #include <jansson.h>
+#include <signal.h>
 
-#define INTERFACE        "eth0"
-#define MAX_PAYLOAD_SIZE 1024
-#define ARDUINO_BUFFER   1024
+#define DEFAULT_INTERFACE  "eth0"
+#define MAX_PAYLOAD_SIZE   1024
+#define ARDUINO_BUFFER     1024
 
 struct color_session {
     unsigned char buf[LWS_PRE + MAX_PAYLOAD_SIZE];
@@ -27,62 +28,83 @@ typedef struct color_t {
 
 } color_t;
 
+typedef struct pannel_t {
+    int sockfd;
+    uint8_t srcaddr[ETHER_ADDR_LEN];
+    uint8_t dstaddr[ETHER_ADDR_LEN];
+    int ifindex;
+    color_t color;
+
+} pannel_t;
+
 const uint8_t dstaddr[] = {
     0xA2, 0x43, 0x42, 0x42, 0x42, 0x01
 };
+
+int stop_requested = 0;
+
+
 
 void diep(char *str) {
     perror(str);
     exit(EXIT_FAILURE);
 }
 
-// FIXME: bitch please, reuse the same socket
-static int arduino_frame(char *interface, color_t *color) {
-    int sockfd;
-	struct ifreq if_idx;
-	struct ifreq if_mac;
+static pannel_t *socket_connect(pannel_t *pannel, char *interface, const uint8_t *destination) {
+	struct ifreq ifdata;
+
+    // create raw socket
+	if((pannel->sockfd = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW)) < 0)
+	    diep("socket");
+
+    // get interface index
+    memset(&ifdata, 0, sizeof(struct ifreq));
+	strncpy(ifdata.ifr_name, interface, IFNAMSIZ - 1);
+    if(ioctl(pannel->sockfd, SIOCGIFINDEX, &ifdata) < 0)
+	    diep("SIOCGIFINDEX");
+
+    pannel->ifindex = ifdata.ifr_ifindex;
+
+    // get interface mac address
+	if(ioctl(pannel->sockfd, SIOCGIFHWADDR, &ifdata) < 0)
+	    diep("SIOCGIFHWADDR");
+
+    // set pannel source and destination mac addresses
+    memcpy(pannel->srcaddr, ifdata.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
+    memcpy(pannel->dstaddr, destination, ETHER_ADDR_LEN);
+
+    return pannel;
+}
+
+static int arduino_frame(pannel_t *pannel) {
     char sendbuf[ARDUINO_BUFFER];
     struct ether_header *eh = (struct ether_header *) sendbuf;
     struct sockaddr_ll saddr;
     int length = 0;
 
-	if((sockfd = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW)) == -1)
-	    diep("socket");
-
-    memset(&if_idx, 0, sizeof(struct ifreq));
-	strncpy(if_idx.ifr_name, interface, IFNAMSIZ - 1);
-
-    if(ioctl(sockfd, SIOCGIFINDEX, &if_idx) < 0)
-	    perror("SIOCGIFINDEX");
-
-	memset(&if_mac, 0, sizeof(struct ifreq));
-	strncpy(if_mac.ifr_name, interface, IFNAMSIZ - 1);
-
-	if(ioctl(sockfd, SIOCGIFHWADDR, &if_mac) < 0)
-	    perror("SIOCGIFHWADDR");
-
     memset(sendbuf, 0, ARDUINO_BUFFER);
 
-    memcpy(eh->ether_shost, if_mac.ifr_hwaddr.sa_data, 6);
-    memcpy(eh->ether_dhost, dstaddr, 6);
+    // set source and destination frame
+    memcpy(eh->ether_shost, pannel->srcaddr, ETHER_ADDR_LEN);
+    memcpy(eh->ether_dhost, pannel->dstaddr, ETHER_ADDR_LEN);
 
+    // set frame type
 	eh->ether_type = 0xb688;
 	length += sizeof(struct ether_header);
 
-    sendbuf[length + 0] = color->red;
-	sendbuf[length + 1] = color->green;
-	sendbuf[length + 2] = color->blue;
-
+    // set frame payload
+    sendbuf[length + 0] = pannel->color.red;
+	sendbuf[length + 1] = pannel->color.green;
+	sendbuf[length + 2] = pannel->color.blue;
     length += 3;
 
-    saddr.sll_ifindex = if_idx.ifr_ifindex;
+    // set socket frame metadata
+    saddr.sll_ifindex = pannel->ifindex;
 	saddr.sll_halen = ETH_ALEN;
-	memcpy(saddr.sll_addr, dstaddr, 6);
+	memcpy(saddr.sll_addr, pannel->dstaddr, ETHER_ADDR_LEN);
 
-    if(sendto(sockfd, sendbuf, length, 0, (struct sockaddr *) &saddr, sizeof(struct sockaddr_ll)) < 0)
+    if(sendto(pannel->sockfd, sendbuf, length, 0, (struct sockaddr *) &saddr, sizeof(struct sockaddr_ll)) < 0)
         perror("send");
-
-    close(sockfd);
 
     return 0;
 }
@@ -93,7 +115,7 @@ color_t *color_json(void *buffer, size_t length, color_t *color) {
     json_t *object;
 
     if(!(root = json_loadb(buffer, length, 0, &error))) {
-        fprintf(stderr, "json error: on line %d: %s\n", error.line, error.text);
+        fprintf(stderr, "[-] json error: on line %d: %s\n", error.line, error.text);
         return NULL;
     }
 
@@ -116,7 +138,7 @@ color_t *color_json(void *buffer, size_t length, color_t *color) {
 
 static int callback_color(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     struct color_session *pss = (struct color_session *) user;
-    color_t color;
+    pannel_t *pannel = (pannel_t *) lws_get_protocol(wsi)->user;
     int n;
 
     if(reason == LWS_CALLBACK_ESTABLISHED) {
@@ -155,8 +177,8 @@ static int callback_color(struct lws *wsi, enum lws_callback_reasons reason, voi
         if(lws_is_final_fragment(wsi)) {
             printf(">> <%.*s>\n", pss->len, pss->buf + LWS_PRE);
 
-            if(color_json(pss->buf + LWS_PRE, pss->len, &color))
-                arduino_frame(INTERFACE, &color);
+            if(color_json(pss->buf + LWS_PRE, pss->len, &pannel->color))
+                arduino_frame(pannel);
         }
 
         lws_rx_flow_control(wsi, 0);
@@ -177,17 +199,44 @@ static const struct lws_extension exts[] = {
     {NULL, NULL, NULL}
 };
 
-int main(int argc, char **argv) {
-    (void) argc;
-    (void) argv;
+static void sighandler(int signal) {
+    // got a signal
+    printf("\n[+] signal intercepted: %d\n", signal);
 
+    // setting exit code value
+    stop_requested = 128 + signal;
+    printf("[+] requesting shutdown with code: %d\n", stop_requested);
+}
+
+static int signal_intercept(int signal, void (*function)(int)) {
+    struct sigaction sig;
+    int ret;
+
+    sigemptyset(&sig.sa_mask);
+    sig.sa_handler = function;
+    sig.sa_flags = 0;
+
+    if((ret = sigaction(signal, &sig, NULL)) == -1)
+        diep("sigaction");
+
+    return ret;
+}
+
+int main(int argc, char **argv) {
     int port = 7681;
     struct lws_context *context;
     int listen_port = port;
     struct lws_context_creation_info info;
+    char *interface = DEFAULT_INTERFACE;
+    pannel_t pannel;
+
+    printf("[+] initializing server\n");
 
     memset(&info, 0, sizeof(info));
-    printf("[+] initializing\n");
+    memset(&pannel, 0, sizeof(pannel_t));
+
+    // set protocol user pointer
+    protocols[0].user = &pannel;
 
     info.port = listen_port;
     info.protocols = protocols;
@@ -195,17 +244,34 @@ int main(int argc, char **argv) {
     info.uid = -1;
     info.extensions = exts;
 
+    // signal handling
+    signal_intercept(SIGINT, sighandler);
+
     if((context = lws_create_context(&info)) == NULL) {
         lwsl_err("libwebsocket init failed\n");
         exit(EXIT_FAILURE);
     }
 
+    // socket initialization
+    if(argc > 1)
+        interface = argv[1];
+
+    printf("[+] initializing frame\n");
+    printf("[+] binding interface: %s\n", interface);
+
+    if(!(socket_connect(&pannel, interface, dstaddr))) {
+        fprintf(stderr, "[-] could not initialize frame\n");
+        exit(EXIT_FAILURE);
+    }
+
     int n = 1;
 
-    while(n >= 0)
+    printf("[+] waiting for clients\n");
+
+    while(n >= 0 && !stop_requested)
         n = lws_service(context, 10);
 
     lws_context_destroy(context);
 
-    return 0;
+    return stop_requested;
 }
