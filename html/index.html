@@ -103,9 +103,19 @@
     });
 
     var ws = new WebSocket("ws://" + location.host + ":7681");
+    ws.onmessage = function(msg) {
+        var json = JSON.parse(msg.data);
+
+        if(json['type'] != undefined && json['type'] == 'initial') {
+            console.log("Applying current color");
+            console.log(colorWheel);
+            colorWheel.color.set({r: json['red'], g: json['green'], b: json['blue']});
+        }
+    }
+
 
     colorWheel.on("color:change", function(color, changes) {
-        console.log(color.rgb);
+        // console.log(color.rgb);
 
         if(ws.readyState == 1)
             ws.send(JSON.stringify(color.rgb));
