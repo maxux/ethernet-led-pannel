@@ -149,6 +149,27 @@ static int callback_color(struct lws *wsi, enum lws_callback_reasons reason, voi
     if(reason == LWS_CALLBACK_ESTABLISHED) {
         printf("[+] new connection\n");
         pss->len = -1;
+
+        unsigned char message[LWS_PRE + 1 + 4096];
+        unsigned char *p = &message[LWS_PRE];
+
+        printf("[+] sending current color [%d, %d, %d]\n", pannel->color.red, pannel->color.green, pannel->color.blue);
+
+        json_t *root = json_object();
+        json_object_set_new(root, "type", json_string("initial"));
+        json_object_set_new(root, "red", json_integer(pannel->color.red));
+        json_object_set_new(root, "green", json_integer(pannel->color.green));
+        json_object_set_new(root, "blue", json_integer(pannel->color.blue));
+
+        char *output = json_dumps(root, JSON_COMPACT);
+        size_t length = strlen(output);
+        json_decref(root);
+
+        memcpy(p, output, length);
+        free(output);
+
+        lws_write(wsi, p, length, LWS_WRITE_TEXT);
+
         return 0;
     }
 
